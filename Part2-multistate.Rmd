@@ -1,0 +1,2066 @@
+# main
+## model
+```{r}
+library(msm)
+library(arrow)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+# =========================
+# 1. 读取数据
+# =========================
+df_states <- read_parquet("File/Part Data/part2-main.parquet")
+# 查看结构
+str(df_states)
+head(df_states)
+```
+
+```{r}
+# =========================
+# 2. 数据整理
+# =========================
+df_states <- df_states %>%
+  arrange(`身份证号`, time) %>%
+  mutate(
+    state = as.integer(state),
+    time_years = as.numeric(time_years),
+    payment = as.factor(payment),
+    gender = as.factor(gender)
+  )
+
+# 支付方式
+df_states$payment <- relevel(df_states$payment, ref = "SP")
+# 年龄
+df_states$age10 <- df_states$age / 10
+# 性别
+df_states$gender <- factor(df_states$gender, levels = c(0, 1))
+```
+
+```{r}
+# =========================
+# 3. 检查相邻观测的状态转移
+# =========================
+df_check <- df_states %>%
+  arrange(`身份证号`, time) %>%
+  group_by(`身份证号`) %>%
+  mutate(next_state = lead(state)) %>%
+  ungroup()
+
+trans_table <- df_check %>%
+  filter(!is.na(next_state)) %>%
+  count(state, next_state) %>%
+  arrange(state, next_state)
+
+trans_table
+```
+
+```{r}
+# =========================
+# 4. 定义初始 Q 矩阵
+# =========================
+Q_init <- rbind(
+  c(0, 0.10, 0.10, 0.05, 0),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0)
+)
+
+rownames(Q_init) <- colnames(Q_init) <- c("State1", "State2", "State3", "State4", "State5")
+Q_init
+```
+
+```{r}
+# =========================
+# 5. 基础模型
+# =========================
+msm_base <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 1000, trace = 1)
+)
+
+msm_base
+```
+
+```{r}
+msm_pay <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init,
+  covariates = ~ payment,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 2000, trace = 1, reltol = 1e-10)
+)
+```
+
+```{r}
+msm_pay <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init2,
+  covariates = ~ payment,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 2000, trace = 1, reltol = 1e-10)
+)
+
+msm_pay
+```
+
+```{r}
+msm_full <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init,
+  covariates = ~ payment + age10 + gender,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 3000, trace = 1, reltol = 1e-10)
+)
+
+msm_full
+```
+```{r}
+saveRDS(msm_full, 
+        'E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part2/Model/main_allicds.RDS')
+
+msm_full <- readRDS('E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part2/Model/main_allicds.RDS')
+```
+
+## pmatrix
+```{r}
+# =========================
+# 0-6年各状态转移概率（msm_full）
+# 固定 age 和 gender，仅比较不同 payment
+# =========================
+
+time_points <- seq(0, 6, by = 0.05)
+payment_types <- levels(df_states$payment)
+
+# 这里建议明确指定一个代表性年龄和性别
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]   # 例如 "0.0" 或 "1.0"
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  for (t in time_points) {
+    p_result <- pmatrix.msm(
+      msm_full,
+      t = t,
+      covariates = list(
+        payment = pay_type,
+        age10 = ref_age,
+        gender = ref_gender
+      ),
+      ci = "normal",
+      B = 200
+    )
+    
+    est <- p_result$estimates
+    low <- p_result$L
+    upp <- p_result$U
+    
+    res_list[[k]] <- data.frame(
+      t = t,
+      type = pay_type,
+      age = ref_age,
+      gender = ref_gender,
+      
+      r12  = est[1, 2],
+      r12l = low[1, 2],
+      r12u = upp[1, 2],
+      
+      r13  = est[1, 3],
+      r13l = low[1, 3],
+      r13u = upp[1, 3],
+      
+      r14  = est[1, 4],
+      r14l = low[1, 4],
+      r14u = upp[1, 4],
+      
+      r25  = est[2, 5],
+      r25l = low[2, 5],
+      r25u = upp[2, 5],
+      
+      r35  = est[3, 5],
+      r35l = low[3, 5],
+      r35u = upp[3, 5],
+      
+      r45  = est[4, 5],
+      r45l = low[4, 5],
+      r45u = upp[4, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+cumulative_risk_table <- do.call(rbind, res_list)
+cumulative_risk_table
+```
+```{r}
+write_parquet(
+  cumulative_risk_table,
+  "File/Result/Part2/main/pmatrix.parquet"
+)
+```
+
+
+
+## ppass
+```{r}
+# =========================
+# msm_full: 用 ppass.msm() 计算累计到达概率（带CI）
+# =========================
+
+library(msm)
+library(dplyr)
+library(arrow)
+
+time_points <- seq(0, 6, by = 0.1)
+payment_types <- levels(df_states$payment)
+
+# 固定协变量
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  for (t in time_points) {
+    p_result <- ppass.msm(
+      msm_full,
+      tot = t,
+      covariates = list(
+        payment = pay_type,
+        age10 = ref_age,
+        gender = ref_gender
+      ),
+      ci = "normal",
+      B = 200
+    )
+    
+    est <- p_result$estimates
+    low <- p_result$L
+    upp <- p_result$U
+    
+    res_list[[k]] <- data.frame(
+      t = t,
+      type = pay_type,
+      age10 = ref_age,
+      gender = ref_gender,
+      
+      # 从 state1 出发，到时间 t 为止已访问过某状态的概率
+      p12  = est[1, 2],
+      p12l = low[1, 2],
+      p12u = upp[1, 2],
+      
+      p13  = est[1, 3],
+      p13l = low[1, 3],
+      p13u = upp[1, 3],
+      
+      p14  = est[1, 4],
+      p14l = low[1, 4],
+      p14u = upp[1, 4],
+      
+      p15  = est[1, 5],
+      p15l = low[1, 5],
+      p15u = upp[1, 5],
+      
+      # 从 state2/3/4 出发，到时间 t 为止已访问过 state5 的概率
+      p25  = est[2, 5],
+      p25l = low[2, 5],
+      p25u = upp[2, 5],
+      
+      p35  = est[3, 5],
+      p35l = low[3, 5],
+      p35u = upp[3, 5],
+      
+      p45  = est[4, 5],
+      p45l = low[4, 5],
+      p45u = upp[4, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+cumulative_pass_table <- bind_rows(res_list)
+
+head(cumulative_pass_table)
+```
+
+```{r}
+# 导出
+arrow::write_parquet(
+  cumulative_pass_table,
+  "File/Result/Part2/Main/ppass_allicds.parquet"
+)
+```
+
+## efpt
+```{r}
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]
+payment_types <- levels(df_states$payment)
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  efpt_result <- efpt.msm(
+    msm_full,
+    tostate = 5,
+    covariates = list(
+      payment = pay_type,
+      age10 = ref_age,
+      gender = ref_gender
+    ),
+    ci = "normal"
+  )
+  
+  # efpt_result 是矩阵：
+  # 第1行 est，第2行 2.5%，第3行 97.5%
+  res_list[[k]] <- data.frame(
+    type = pay_type,
+    age10 = ref_age,
+    gender = ref_gender,
+    
+    efpt_1_to_5  = efpt_result[1, 1],
+    efpt_1_to_5l = efpt_result[2, 1],
+    efpt_1_to_5u = efpt_result[3, 1],
+    
+    efpt_2_to_5  = efpt_result[1, 2],
+    efpt_2_to_5l = efpt_result[2, 2],
+    efpt_2_to_5u = efpt_result[3, 2],
+    
+    efpt_3_to_5  = efpt_result[1, 3],
+    efpt_3_to_5l = efpt_result[2, 3],
+    efpt_3_to_5u = efpt_result[3, 3],
+    
+    efpt_4_to_5  = efpt_result[1, 4],
+    efpt_4_to_5l = efpt_result[2, 4],
+    efpt_4_to_5u = efpt_result[3, 4],
+    
+    efpt_5_to_5  = efpt_result[1, 5],
+    efpt_5_to_5l = efpt_result[2, 5],
+    efpt_5_to_5u = efpt_result[3, 5]
+  )
+  
+  k <- k + 1
+}
+```
+
+
+```{r}
+write_parquet(
+  efpt_table,
+  "File/Result/Part2/Main/efpt_to5.parquet"
+)
+```
+
+## totlos
+### time-dependent
+```{r}
+time_points <- seq(0, 6, by = 0.1)
+payment_types <- levels(df_states$payment)
+
+# 固定协变量
+ref_age10 <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "\n")
+  
+  for (tt in time_points) {
+    los_result <- totlos.msm(
+      msm_full,
+      t = tt,
+      covariates = list(
+        payment = pay_type,
+        age10 = ref_age10,
+        gender = ref_gender
+      ),
+      ci = "normal"
+    )
+    
+    # 你的版本返回矩阵：
+    # 第1行 = est
+    # 第2行 = 2.5%
+    # 第3行 = 97.5%
+    res_list[[k]] <- data.frame(
+      t = tt,
+      type = pay_type,
+      age10 = ref_age10,
+      gender = ref_gender,
+      
+      los_state1  = los_result[1, 1],
+      los_state1l = los_result[2, 1],
+      los_state1u = los_result[3, 1],
+      
+      los_state2  = los_result[1, 2],
+      los_state2l = los_result[2, 2],
+      los_state2u = los_result[3, 2],
+      
+      los_state3  = los_result[1, 3],
+      los_state3l = los_result[2, 3],
+      los_state3u = los_result[3, 3],
+      
+      los_state4  = los_result[1, 4],
+      los_state4l = los_result[2, 4],
+      los_state4u = los_result[3, 4],
+      
+      los_state5  = los_result[1, 5],
+      los_state5l = los_result[2, 5],
+      los_state5u = los_result[3, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+los_timecourse_table <- bind_rows(res_list)
+
+head(los_timecourse_table)
+```
+
+```{r}
+write_parquet(
+  los_timecourse_table,
+  "File/Result/Part2/Main/totlos_timedependent.parquet"
+)
+```
+
+### 6years
+```{r}
+# 固定协变量：年龄和性别
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]
+payment_types <- levels(df_states$payment)
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "\n")
+  
+  # 计算到第 5 年时，不同状态的期望逗留时间
+  los_result <- totlos.msm(
+    msm_full, 
+    t = 6, 
+    covariates = list(
+      payment = pay_type
+      # ,age10 = ref_age
+      # ,gender = ref_gender
+    ),
+    ci = "normal",
+    B = 200
+  )
+  
+  # los_result 是一个原子向量，包含了状态 1 到状态 5 的期望逗留时间
+  res_list[[k]] <- data.frame(
+    type = pay_type,
+    # age10 = ref_age,
+    # gender = ref_gender,
+    t = 6,
+    
+    # 使用索引直接访问各状态的期望逗留时间
+    los_state1  = los_result[1],
+    los_state1l = los_result[2],
+    los_state1u = los_result[3],
+    
+    los_state2  = los_result[4],
+    los_state2l = los_result[5],
+    los_state2u = los_result[6],
+    
+    los_state3  = los_result[7],
+    los_state3l = los_result[8],
+    los_state3u = los_result[9],
+    
+    los_state4  = los_result[10],
+    los_state4l = los_result[11],
+    los_state4u = los_result[12],
+    
+    los_state5  = los_result[13],
+    los_state5l = los_result[14],
+    los_state5u = los_result[15]
+  )
+  
+  k <- k + 1
+}
+
+# 汇总所有医保类型的结果
+los_table_6y <- bind_rows(res_list)
+```
+
+```{r}
+# 保存结果为 Parquet 文件
+write_parquet(
+  los_table_6y,
+  "File/Result/Part2/Main/totlos_6y.parquet"
+)
+```
+
+
+
+
+# Sensitivity - primary icds
+## model
+```{r}
+library(msm)
+library(arrow)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+# =========================
+# 1. 读取数据
+# =========================
+df_states <- read_parquet("File/Part Data/part2-sensitivity-primaryicds.parquet")
+# 查看结构
+str(df_states)
+```
+
+```{r}
+# =========================
+# 2. 数据整理
+# =========================
+df_states <- df_states %>%
+  arrange(`身份证号`, time) %>%
+  mutate(
+    state = as.integer(state),
+    time_years = as.numeric(time_years),
+    payment = as.factor(payment),
+    gender = as.factor(gender)
+  )
+
+# 支付方式
+df_states$payment <- relevel(df_states$payment, ref = "SP")
+# 年龄
+df_states$age10 <- df_states$age / 10
+# 性别
+df_states$gender <- factor(df_states$gender, levels = c(0, 1))
+```
+
+```{r}
+# =========================
+# 3. 检查相邻观测的状态转移
+# =========================
+df_check <- df_states %>%
+  arrange(`身份证号`, time) %>%
+  group_by(`身份证号`) %>%
+  mutate(next_state = lead(state)) %>%
+  ungroup()
+
+trans_table <- df_check %>%
+  filter(!is.na(next_state)) %>%
+  count(state, next_state) %>%
+  arrange(state, next_state)
+
+trans_table
+```
+
+```{r}
+# =========================
+# 4. 定义初始 Q 矩阵
+# =========================
+Q_init <- rbind(
+  c(0, 0.10, 0.10, 0.05, 0),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0)
+)
+
+rownames(Q_init) <- colnames(Q_init) <- c("State1", "State2", "State3", "State4", "State5")
+Q_init
+```
+
+```{r}
+# =========================
+# 5. 基础模型
+# =========================
+msm_base <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 1000, trace = 1)
+)
+
+msm_base
+```
+
+```{r}
+msm_pay <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init,
+  covariates = ~ payment,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 2000, trace = 1, reltol = 1e-10)
+)
+```
+
+```{r}
+msm_pay <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init2,
+  covariates = ~ payment,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 2000, trace = 1, reltol = 1e-10)
+)
+
+msm_pay
+```
+
+```{r}
+msm_full <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init,
+  covariates = ~ payment + age10 + gender,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 3000, trace = 1, reltol = 1e-10)
+)
+
+msm_full
+```
+
+```{r}
+saveRDS(msm_full, 
+        'E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part2/Model/sensitivity_primaryicds.RDS')
+
+msm_full <- readRDS('E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part2/Model/sensitivity_primaryicds.RDS')
+```
+
+## pmatrix
+```{r}
+# =========================
+# 0-6年各状态转移概率（msm_full）
+# 固定 age 和 gender，仅比较不同 payment
+# =========================
+
+time_points <- seq(0, 6, by = 0.05)
+payment_types <- levels(df_states$payment)
+
+# 这里建议明确指定一个代表性年龄和性别
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]   # 例如 "0.0" 或 "1.0"
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  for (t in time_points) {
+    p_result <- pmatrix.msm(
+      msm_full,
+      t = t,
+      covariates = list(
+        payment = pay_type,
+        age10 = ref_age,
+        gender = ref_gender
+      ),
+      ci = "normal",
+      B = 200
+    )
+    
+    est <- p_result$estimates
+    low <- p_result$L
+    upp <- p_result$U
+    
+    res_list[[k]] <- data.frame(
+      t = t,
+      type = pay_type,
+      age = ref_age,
+      gender = ref_gender,
+      
+      r12  = est[1, 2],
+      r12l = low[1, 2],
+      r12u = upp[1, 2],
+      
+      r13  = est[1, 3],
+      r13l = low[1, 3],
+      r13u = upp[1, 3],
+      
+      r14  = est[1, 4],
+      r14l = low[1, 4],
+      r14u = upp[1, 4],
+      
+      r25  = est[2, 5],
+      r25l = low[2, 5],
+      r25u = upp[2, 5],
+      
+      r35  = est[3, 5],
+      r35l = low[3, 5],
+      r35u = upp[3, 5],
+      
+      r45  = est[4, 5],
+      r45l = low[4, 5],
+      r45u = upp[4, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+cumulative_risk_full <- do.call(rbind, res_list)
+
+head(cumulative_risk_full)
+```
+
+
+```{r}
+# 导出
+arrow::write_parquet(
+  cumulative_risk_full,
+  "File/Result/Part2/Sensitivity-primaryicds/pmatrix.parquet"
+)
+```
+
+## ppass
+```{r}
+# =========================
+# msm_full: 用 ppass.msm() 计算累计到达概率（带CI）
+# =========================
+
+library(msm)
+library(dplyr)
+library(arrow)
+
+time_points <- seq(0, 6, by = 0.1)
+payment_types <- levels(df_states$payment)
+
+# 固定协变量
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  for (t in time_points) {
+    p_result <- ppass.msm(
+      msm_full,
+      tot = t,
+      covariates = list(
+        payment = pay_type,
+        age10 = ref_age,
+        gender = ref_gender
+      ),
+      ci = "normal",
+      B = 200
+    )
+    
+    est <- p_result$estimates
+    low <- p_result$L
+    upp <- p_result$U
+    
+    res_list[[k]] <- data.frame(
+      t = t,
+      type = pay_type,
+      age10 = ref_age,
+      gender = ref_gender,
+      
+      # 从 state1 出发，到时间 t 为止已访问过某状态的概率
+      p12  = est[1, 2],
+      p12l = low[1, 2],
+      p12u = upp[1, 2],
+      
+      p13  = est[1, 3],
+      p13l = low[1, 3],
+      p13u = upp[1, 3],
+      
+      p14  = est[1, 4],
+      p14l = low[1, 4],
+      p14u = upp[1, 4],
+      
+      p15  = est[1, 5],
+      p15l = low[1, 5],
+      p15u = upp[1, 5],
+      
+      # 从 state2/3/4 出发，到时间 t 为止已访问过 state5 的概率
+      p25  = est[2, 5],
+      p25l = low[2, 5],
+      p25u = upp[2, 5],
+      
+      p35  = est[3, 5],
+      p35l = low[3, 5],
+      p35u = upp[3, 5],
+      
+      p45  = est[4, 5],
+      p45l = low[4, 5],
+      p45u = upp[4, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+cumulative_pass_table <- bind_rows(res_list)
+
+head(cumulative_pass_table)
+```
+
+```{r}
+# 导出
+arrow::write_parquet(
+  cumulative_pass_table,
+  "File/Result/Part2/Sensitivity-primaryicds/ppass.parquet"
+)
+```
+
+## efpt
+```{r}
+msm_full <- readRDS("E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part2/Model/sensitivity_primaryicds.RDS")
+```
+
+```{r}
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]
+payment_types <- levels(df_states$payment)
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  efpt_result <- efpt.msm(
+    msm_full,
+    tostate = 5,
+    covariates = list(
+      payment = pay_type,
+      age10 = ref_age,
+      gender = ref_gender
+    ),
+    ci = "normal"
+  )
+  
+  # efpt_result 是矩阵：
+  # 第1行 est，第2行 2.5%，第3行 97.5%
+  res_list[[k]] <- data.frame(
+    type = pay_type,
+    age10 = ref_age,
+    gender = ref_gender,
+    
+    efpt_1_to_5  = efpt_result[1, 1],
+    efpt_1_to_5l = efpt_result[2, 1],
+    efpt_1_to_5u = efpt_result[3, 1],
+    
+    efpt_2_to_5  = efpt_result[1, 2],
+    efpt_2_to_5l = efpt_result[2, 2],
+    efpt_2_to_5u = efpt_result[3, 2],
+    
+    efpt_3_to_5  = efpt_result[1, 3],
+    efpt_3_to_5l = efpt_result[2, 3],
+    efpt_3_to_5u = efpt_result[3, 3],
+    
+    efpt_4_to_5  = efpt_result[1, 4],
+    efpt_4_to_5l = efpt_result[2, 4],
+    efpt_4_to_5u = efpt_result[3, 4],
+    
+    efpt_5_to_5  = efpt_result[1, 5],
+    efpt_5_to_5l = efpt_result[2, 5],
+    efpt_5_to_5u = efpt_result[3, 5]
+  )
+  
+  k <- k + 1
+}
+
+efpt_table <- bind_rows(res_list)
+```
+
+
+```{r}
+write_parquet(
+  efpt_table,
+  "File/Result/Part2/Sensitivity-primaryicds/efpt_to5.parquet"
+)
+```
+
+## totlos
+### time-dependent
+```{r}
+time_points <- seq(0, 6, by = 0.1)
+payment_types <- levels(df_states$payment)
+
+# 固定协变量
+ref_age10 <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "\n")
+  
+  for (tt in time_points) {
+    los_result <- totlos.msm(
+      msm_full,
+      t = tt,
+      covariates = list(
+        payment = pay_type,
+        age10 = ref_age10,
+        gender = ref_gender
+      ),
+      ci = "normal"
+    )
+    
+    # 你的版本返回矩阵：
+    # 第1行 = est
+    # 第2行 = 2.5%
+    # 第3行 = 97.5%
+    res_list[[k]] <- data.frame(
+      t = tt,
+      type = pay_type,
+      age10 = ref_age10,
+      gender = ref_gender,
+      
+      los_state1  = los_result[1, 1],
+      los_state1l = los_result[2, 1],
+      los_state1u = los_result[3, 1],
+      
+      los_state2  = los_result[1, 2],
+      los_state2l = los_result[2, 2],
+      los_state2u = los_result[3, 2],
+      
+      los_state3  = los_result[1, 3],
+      los_state3l = los_result[2, 3],
+      los_state3u = los_result[3, 3],
+      
+      los_state4  = los_result[1, 4],
+      los_state4l = los_result[2, 4],
+      los_state4u = los_result[3, 4],
+      
+      los_state5  = los_result[1, 5],
+      los_state5l = los_result[2, 5],
+      los_state5u = los_result[3, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+los_timecourse_table <- bind_rows(res_list)
+
+head(los_timecourse_table)
+```
+
+```{r}
+write_parquet(
+  los_timecourse_table,
+  "File/Result/Part2/sensitivity-primaryicds/totlos_timedependent.parquet"
+)
+```
+
+### 6years
+```{r}
+# 固定协变量：年龄和性别
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]
+payment_types <- levels(df_states$payment)
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "\n")
+  
+  # 计算到第 5 年时，不同状态的期望逗留时间
+  los_result <- totlos.msm(
+    msm_full, 
+    t = 6, 
+    covariates = list(
+      payment = pay_type
+      # ,age10 = ref_age
+      # ,gender = ref_gender
+    ),
+    ci = "normal",
+    B = 200
+  )
+  
+  # los_result 是一个原子向量，包含了状态 1 到状态 5 的期望逗留时间
+  res_list[[k]] <- data.frame(
+    type = pay_type,
+    # age10 = ref_age,
+    # gender = ref_gender,
+    t = 6,
+    
+    # 使用索引直接访问各状态的期望逗留时间
+    los_state1  = los_result[1],
+    los_state1l = los_result[2],
+    los_state1u = los_result[3],
+    
+    los_state2  = los_result[4],
+    los_state2l = los_result[5],
+    los_state2u = los_result[6],
+    
+    los_state3  = los_result[7],
+    los_state3l = los_result[8],
+    los_state3u = los_result[9],
+    
+    los_state4  = los_result[10],
+    los_state4l = los_result[11],
+    los_state4u = los_result[12],
+    
+    los_state5  = los_result[13],
+    los_state5l = los_result[14],
+    los_state5u = los_result[15]
+  )
+  
+  k <- k + 1
+}
+
+# 汇总所有医保类型的结果
+los_table_6y <- bind_rows(res_list)
+```
+
+
+```{r}
+# 保存结果为 Parquet 文件
+write_parquet(
+  los_table_6y,
+  "File/Result/Part2/Sensitivity-primaryicds/totlos_6y.parquet"
+)
+```
+
+# Sensitivity - anystate
+## main
+```{r}
+library(msm)
+library(arrow)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+# =========================
+# 1. 读取数据
+# =========================
+df_states <- read_parquet("File/Part Data/part2-sensitivity-anystate.parquet")
+# 查看结构
+str(df_states)
+head(df_states)
+```
+
+```{r}
+# =========================
+# 2. 数据整理
+# =========================
+df_states <- df_states %>%
+  arrange(`身份证号`, time) %>%
+  mutate(
+    state = as.integer(state),
+    time_years = as.numeric(time_years),
+    payment = as.factor(payment),
+    gender = as.factor(gender)
+  )
+
+# 支付方式
+df_states$payment <- relevel(df_states$payment, ref = "SP")
+# 年龄
+df_states$age10 <- df_states$age / 10
+# 性别
+df_states$gender <- factor(df_states$gender, levels = c(0, 1))
+```
+
+```{r}
+# =========================
+# 3. 检查相邻观测的状态转移
+# =========================
+df_check <- df_states %>%
+  arrange(`身份证号`, time) %>%
+  group_by(`身份证号`) %>%
+  mutate(next_state = lead(state)) %>%
+  ungroup()
+
+trans_table <- df_check %>%
+  filter(!is.na(next_state)) %>%
+  count(state, next_state) %>%
+  arrange(state, next_state)
+
+trans_table
+```
+
+```{r}
+# =========================
+# 4. 定义初始 Q 矩阵
+# =========================
+Q_init <- rbind(
+  c(0, 0.10, 0.10, 0.05, 0),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0)
+)
+
+rownames(Q_init) <- colnames(Q_init) <- c("State1", "State2", "State3", "State4", "State5")
+Q_init
+```
+
+```{r}
+# =========================
+# 5. 基础模型
+# =========================
+msm_base <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 1000, trace = 1)
+)
+
+msm_base
+```
+
+```{r}
+msm_pay <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init,
+  covariates = ~ payment,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 2000, trace = 1, reltol = 1e-10)
+)
+```
+
+```{r}
+msm_pay <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init2,
+  covariates = ~ payment,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 2000, trace = 1, reltol = 1e-10)
+)
+
+msm_pay
+```
+
+```{r}
+msm_full <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init,
+  covariates = ~ payment + age10 + gender,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 3000, trace = 1, reltol = 1e-10)
+)
+
+msm_full
+```
+
+```{r}
+saveRDS(msm_full, 
+        'E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part2/Model/sensitivity_anystate.RDS')
+
+msm_full <- readRDS('E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part2/Model/sensitivity_anystate.RDS')
+```
+
+## pmatrix
+```{r}
+# =========================
+# 0-6年各状态转移概率（msm_full）
+# 固定 age 和 gender，仅比较不同 payment
+# =========================
+
+time_points <- seq(0, 6, by = 0.05)
+payment_types <- levels(df_states$payment)
+
+# 这里建议明确指定一个代表性年龄和性别
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]   # 例如 "0.0" 或 "1.0"
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  for (t in time_points) {
+    p_result <- pmatrix.msm(
+      msm_full,
+      t = t,
+      covariates = list(
+        payment = pay_type,
+        age10 = ref_age,
+        gender = ref_gender
+      ),
+      ci = "normal",
+      B = 200
+    )
+    
+    est <- p_result$estimates
+    low <- p_result$L
+    upp <- p_result$U
+    
+    res_list[[k]] <- data.frame(
+      t = t,
+      type = pay_type,
+      age = ref_age,
+      gender = ref_gender,
+      
+      r12  = est[1, 2],
+      r12l = low[1, 2],
+      r12u = upp[1, 2],
+      
+      r13  = est[1, 3],
+      r13l = low[1, 3],
+      r13u = upp[1, 3],
+      
+      r14  = est[1, 4],
+      r14l = low[1, 4],
+      r14u = upp[1, 4],
+      
+      r25  = est[2, 5],
+      r25l = low[2, 5],
+      r25u = upp[2, 5],
+      
+      r35  = est[3, 5],
+      r35l = low[3, 5],
+      r35u = upp[3, 5],
+      
+      r45  = est[4, 5],
+      r45l = low[4, 5],
+      r45u = upp[4, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+cumulative_risk_full <- do.call(rbind, res_list)
+
+head(cumulative_risk_full)
+```
+
+
+```{r}
+# 导出
+arrow::write_parquet(
+  cumulative_risk_full,
+  "File/Result/Part2/Sensitivity-anystate/pmatrix.parquet"
+)
+```
+
+## ppass
+```{r}
+# =========================
+# msm_full: 用 ppass.msm() 计算累计到达概率（带CI）
+# =========================
+
+library(msm)
+library(dplyr)
+library(arrow)
+
+time_points <- seq(0, 6, by = 0.1)
+payment_types <- levels(df_states$payment)
+
+# 固定协变量
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  for (t in time_points) {
+    p_result <- ppass.msm(
+      msm_full,
+      tot = t,
+      covariates = list(
+        payment = pay_type,
+        age10 = ref_age,
+        gender = ref_gender
+      ),
+      ci = "normal",
+      B = 200
+    )
+    
+    est <- p_result$estimates
+    low <- p_result$L
+    upp <- p_result$U
+    
+    res_list[[k]] <- data.frame(
+      t = t,
+      type = pay_type,
+      age10 = ref_age,
+      gender = ref_gender,
+      
+      # 从 state1 出发，到时间 t 为止已访问过某状态的概率
+      p12  = est[1, 2],
+      p12l = low[1, 2],
+      p12u = upp[1, 2],
+      
+      p13  = est[1, 3],
+      p13l = low[1, 3],
+      p13u = upp[1, 3],
+      
+      p14  = est[1, 4],
+      p14l = low[1, 4],
+      p14u = upp[1, 4],
+      
+      p15  = est[1, 5],
+      p15l = low[1, 5],
+      p15u = upp[1, 5],
+      
+      # 从 state2/3/4 出发，到时间 t 为止已访问过 state5 的概率
+      p25  = est[2, 5],
+      p25l = low[2, 5],
+      p25u = upp[2, 5],
+      
+      p35  = est[3, 5],
+      p35l = low[3, 5],
+      p35u = upp[3, 5],
+      
+      p45  = est[4, 5],
+      p45l = low[4, 5],
+      p45u = upp[4, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+cumulative_pass_table <- bind_rows(res_list)
+
+head(cumulative_pass_table)
+```
+
+```{r}
+# 导出
+arrow::write_parquet(
+  cumulative_pass_table,
+  "File/Result/Part2/Sensitivity-anystate/ppass.parquet"
+)
+```
+
+## efpt
+```{r}
+msm_full <- readRDS("E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part2/Model/sensitivity_anystate.RDS")
+```
+
+```{r}
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+# ref_gender <- levels(df_states$gender)[1]
+# payment_types <- levels(df_states$payment)
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  efpt_result <- efpt.msm(
+    msm_full,
+    tostate = 5,
+    covariates = list(
+      payment = pay_type
+      # ,age10 = ref_age
+      # ,gender = ref_gender
+    ),
+    ci = "normal"
+  )
+  
+  # efpt_result 是矩阵：
+  # 第1行 est，第2行 2.5%，第3行 97.5%
+  res_list[[k]] <- data.frame(
+    type = pay_type,
+    age10 = ref_age,
+    gender = ref_gender,
+    
+    efpt_1_to_5  = efpt_result[1, 1],
+    efpt_1_to_5l = efpt_result[2, 1],
+    efpt_1_to_5u = efpt_result[3, 1],
+    
+    efpt_2_to_5  = efpt_result[1, 2],
+    efpt_2_to_5l = efpt_result[2, 2],
+    efpt_2_to_5u = efpt_result[3, 2],
+    
+    efpt_3_to_5  = efpt_result[1, 3],
+    efpt_3_to_5l = efpt_result[2, 3],
+    efpt_3_to_5u = efpt_result[3, 3],
+    
+    efpt_4_to_5  = efpt_result[1, 4],
+    efpt_4_to_5l = efpt_result[2, 4],
+    efpt_4_to_5u = efpt_result[3, 4],
+    
+    efpt_5_to_5  = efpt_result[1, 5],
+    efpt_5_to_5l = efpt_result[2, 5],
+    efpt_5_to_5u = efpt_result[3, 5]
+  )
+  
+  k <- k + 1
+}
+
+efpt_table <- bind_rows(res_list)
+```
+
+```{r}
+write_parquet(
+  efpt_table,
+  "File/Result/Part2/Sensitivity-anystate/efpt_to5.parquet"
+)
+```
+
+## totlos
+### time-dependent
+```{r}
+time_points <- seq(0, 6, by = 0.1)
+payment_types <- levels(df_states$payment)
+
+# 固定协变量
+ref_age10 <- mean(df_states$age, na.rm = TRUE) / 10
+ref_gender <- levels(df_states$gender)[1]
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "\n")
+  
+  for (tt in time_points) {
+    los_result <- totlos.msm(
+      msm_full,
+      t = tt,
+      covariates = list(
+        payment = pay_type
+      ),
+      ci = "normal"
+    )
+    
+    # 你的版本返回矩阵：
+    # 第1行 = est
+    # 第2行 = 2.5%
+    # 第3行 = 97.5%
+    res_list[[k]] <- data.frame(
+      t = tt,
+      type = pay_type,
+      age10 = ref_age10,
+      gender = ref_gender,
+      
+      los_state1  = los_result[1, 1],
+      los_state1l = los_result[2, 1],
+      los_state1u = los_result[3, 1],
+      
+      los_state2  = los_result[1, 2],
+      los_state2l = los_result[2, 2],
+      los_state2u = los_result[3, 2],
+      
+      los_state3  = los_result[1, 3],
+      los_state3l = los_result[2, 3],
+      los_state3u = los_result[3, 3],
+      
+      los_state4  = los_result[1, 4],
+      los_state4l = los_result[2, 4],
+      los_state4u = los_result[3, 4],
+      
+      los_state5  = los_result[1, 5],
+      los_state5l = los_result[2, 5],
+      los_state5u = los_result[3, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+los_timecourse_table <- bind_rows(res_list)
+
+head(los_timecourse_table)
+```
+
+```{r}
+write_parquet(
+  los_timecourse_table,
+  "File/Result/Part2/sensitivity-anystate/totlos_timedependent.parquet"
+)
+```
+### 6years
+```{r}
+# 固定协变量：年龄和性别
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+# ref_gender <- levels(df_states$gender)[1]
+# payment_types <- levels(df_states$payment)
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "\n")
+  
+  # 计算到第 5 年时，不同状态的期望逗留时间
+  los_result <- totlos.msm(
+    msm_full, 
+    t = 5, 
+    covariates = list(
+      payment = pay_type
+      # ,age10 = ref_age
+      # ,gender = ref_gender
+    ),
+    ci = "normal",
+    B = 200
+  )
+  
+  # los_result 是一个原子向量，包含了状态 1 到状态 5 的期望逗留时间
+  res_list[[k]] <- data.frame(
+    type = pay_type,
+    # age10 = ref_age,
+    # gender = ref_gender,
+    t = 6,
+    
+    # 使用索引直接访问各状态的期望逗留时间
+    los_state1  = los_result[1],
+    los_state1l = los_result[2],
+    los_state1u = los_result[3],
+    
+    los_state2  = los_result[4],
+    los_state2l = los_result[5],
+    los_state2u = los_result[6],
+    
+    los_state3  = los_result[7],
+    los_state3l = los_result[8],
+    los_state3u = los_result[9],
+    
+    los_state4  = los_result[10],
+    los_state4l = los_result[11],
+    los_state4u = los_result[12],
+    
+    los_state5  = los_result[13],
+    los_state5l = los_result[14],
+    los_state5u = los_result[15]
+  )
+  
+  k <- k + 1
+}
+
+# 汇总所有医保类型的结果
+los_table_6y <- bind_rows(res_list)
+```
+
+
+```{r}
+# 保存结果为 Parquet 文件
+write_parquet(
+  los_table_6y,
+  "File/Result/Part2/Sensitivity-anystate/totlos_6y.parquet"
+)
+```
+# External Validation
+## main
+```{r}
+library(msm)
+library(arrow)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+# =========================
+# 1. 读取数据
+# =========================
+df_states <- read_parquet("File/Part Data/part2-external-validation.parquet")
+# 查看结构
+str(df_states)
+head(df_states)
+```
+```{r}
+# gs = df_states[df_states$payment == "GS",]
+# coi = df_states[df_states$payment == "COI",]
+# df_states <- df_states %>% anti_join(gs, by = "身份证号")
+# df_states <- df_states %>% anti_join(coi, by = "身份证号")
+```
+
+
+```{r}
+table(df_states$payment)
+# =========================
+# 2. 数据整理
+# =========================
+df_states <- df_states %>%
+  arrange(`身份证号`, time) %>%
+  mutate(
+    state = as.integer(state),
+    time_years = as.numeric(time_years),
+    payment = as.factor(payment),
+    gender = as.factor(gender)
+  )
+
+# 支付方式
+# df_states$payment <- relevel(df_states$payment, ref = "SP")
+# df_states$payment <- factor(df_states$payment, levels = c("SP", "UEBMI", "URRBMI", "COI"))
+df_states$payment <- factor(df_states$payment, levels = c("SP", "UEBMI", "URRBMI"))
+# 年龄
+df_states$age10 <- df_states$age / 10
+# 性别
+df_states$gender <- factor(df_states$gender, levels = c(0, 1))
+```
+
+```{r}
+# =========================
+# 4. 定义初始 Q 矩阵
+# =========================
+Q_init <- rbind(
+  c(0, 0.10, 0.10, 0.05, 0),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0.10),
+  c(0, 0,    0,    0,    0)
+)
+
+rownames(Q_init) <- colnames(Q_init) <- c("State1", "State2", "State3", "State4", "State5")
+Q_init
+```
+
+
+```{r}
+# =========================
+# 5. 基础模型
+# =========================
+msm_base <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init,
+  gen.inits = FALSE,
+  control = list(fnscale = 4000, maxit = 1000, trace = 1)
+)
+
+msm_base
+```
+
+
+```{r}
+df_states2 <- df_states %>%
+  mutate(
+    payment = factor(payment)
+  )
+msm_pay_12_13 <- msm(
+  state ~ time_years,
+  subject = `身份证号`,
+  data = df_states,
+  qmatrix = Q_init,
+  covariates = list(
+    "1-2" = ~ payment,
+    "1-3" = ~ payment,
+    "2-5" = ~ payment
+  ),
+  gen.inits = FALSE,
+  control = list(
+    fnscale = 4000,
+    maxit   = 2000,
+    trace   = 1,
+    reltol  = 1e-10
+  )
+)
+```
+
+```{r}
+saveRDS(msm_pay_12_13, 
+        'E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part2/Model/external_validation.RDS')
+
+msm_full <- readRDS('E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part2/Model/external_validation.RDS')
+```
+
+## pmatrix
+```{r}
+# =========================
+# 0-6年各状态转移概率（msm_full）
+# 固定 age 和 gender，仅比较不同 payment
+# =========================
+
+time_points <- seq(0, 6, by = 0.05)
+payment_types <- levels(df_states$payment)
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  for (t in time_points) {
+    p_result <- pmatrix.msm(
+      msm_full,
+      t = t,
+      covariates = list(
+        payment = pay_type
+      ),
+      ci = "normal",
+      B = 200
+    )
+    
+    est <- p_result$estimates
+    low <- p_result$L
+    upp <- p_result$U
+    
+    res_list[[k]] <- data.frame(
+      t = t,
+      type = pay_type,
+      age = ref_age,
+      gender = ref_gender,
+      
+      r12  = est[1, 2],
+      r12l = low[1, 2],
+      r12u = upp[1, 2],
+      
+      r13  = est[1, 3],
+      r13l = low[1, 3],
+      r13u = upp[1, 3],
+      
+      r14  = est[1, 4],
+      r14l = low[1, 4],
+      r14u = upp[1, 4],
+      
+      r25  = est[2, 5],
+      r25l = low[2, 5],
+      r25u = upp[2, 5],
+      
+      r35  = est[3, 5],
+      r35l = low[3, 5],
+      r35u = upp[3, 5],
+      
+      r45  = est[4, 5],
+      r45l = low[4, 5],
+      r45u = upp[4, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+cumulative_risk_full <- do.call(rbind, res_list)
+
+head(cumulative_risk_full)
+```
+
+
+```{r}
+# 导出
+arrow::write_parquet(
+  cumulative_risk_full,
+  "File/Result/Part2/External-validation/pmatrix.parquet"
+)
+```
+
+## ppass
+```{r}
+# =========================
+# msm_full: 用 ppass.msm() 计算累计到达概率（带CI）
+# =========================
+
+library(msm)
+library(dplyr)
+library(arrow)
+
+time_points <- seq(0, 6, by = 0.1)
+payment_types <- levels(df_states$payment)
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  for (t in time_points) {
+    p_result <- ppass.msm(
+      msm_full,
+      tot = t,
+      covariates = list(
+        payment = pay_type
+      ),
+      ci = "normal",
+      B = 200
+    )
+    
+    est <- p_result$estimates
+    low <- p_result$L
+    upp <- p_result$U
+    
+    res_list[[k]] <- data.frame(
+      t = t,
+      type = pay_type,
+      age10 = ref_age,
+      gender = ref_gender,
+      
+      # 从 state1 出发，到时间 t 为止已访问过某状态的概率
+      p12  = est[1, 2],
+      p12l = low[1, 2],
+      p12u = upp[1, 2],
+      
+      p13  = est[1, 3],
+      p13l = low[1, 3],
+      p13u = upp[1, 3],
+      
+      p14  = est[1, 4],
+      p14l = low[1, 4],
+      p14u = upp[1, 4],
+      
+      p15  = est[1, 5],
+      p15l = low[1, 5],
+      p15u = upp[1, 5],
+      
+      # 从 state2/3/4 出发，到时间 t 为止已访问过 state5 的概率
+      p25  = est[2, 5],
+      p25l = low[2, 5],
+      p25u = upp[2, 5],
+      
+      p35  = est[3, 5],
+      p35l = low[3, 5],
+      p35u = upp[3, 5],
+      
+      p45  = est[4, 5],
+      p45l = low[4, 5],
+      p45u = upp[4, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+cumulative_pass_table <- bind_rows(res_list)
+
+head(cumulative_pass_table)
+```
+
+```{r}
+# 导出
+arrow::write_parquet(
+  cumulative_pass_table,
+  "File/Result/Part2/External-validation/ppass.parquet"
+)
+```
+
+## efpt
+```{r}
+msm_full <- readRDS("E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part2/Model/sensitivity_anystate.RDS")
+```
+
+```{r}
+ref_age <- mean(df_states$age, na.rm = TRUE) / 10
+# ref_gender <- levels(df_states$gender)[1]
+# payment_types <- levels(df_states$payment)
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "/n")
+  
+  efpt_result <- efpt.msm(
+    msm_full,
+    tostate = 5,
+    covariates = list(
+      payment = pay_type
+      # ,age10 = ref_age
+      # ,gender = ref_gender
+    ),
+    ci = "normal"
+  )
+  
+  # efpt_result 是矩阵：
+  # 第1行 est，第2行 2.5%，第3行 97.5%
+  res_list[[k]] <- data.frame(
+    type = pay_type,
+    age10 = ref_age,
+    gender = ref_gender,
+    
+    efpt_1_to_5  = efpt_result[1, 1],
+    efpt_1_to_5l = efpt_result[2, 1],
+    efpt_1_to_5u = efpt_result[3, 1],
+    
+    efpt_2_to_5  = efpt_result[1, 2],
+    efpt_2_to_5l = efpt_result[2, 2],
+    efpt_2_to_5u = efpt_result[3, 2],
+    
+    efpt_3_to_5  = efpt_result[1, 3],
+    efpt_3_to_5l = efpt_result[2, 3],
+    efpt_3_to_5u = efpt_result[3, 3],
+    
+    efpt_4_to_5  = efpt_result[1, 4],
+    efpt_4_to_5l = efpt_result[2, 4],
+    efpt_4_to_5u = efpt_result[3, 4],
+    
+    efpt_5_to_5  = efpt_result[1, 5],
+    efpt_5_to_5l = efpt_result[2, 5],
+    efpt_5_to_5u = efpt_result[3, 5]
+  )
+  
+  k <- k + 1
+}
+
+efpt_table <- bind_rows(res_list)
+```
+
+```{r}
+write_parquet(
+  efpt_table,
+  "File/Result/Part2/Sensitivity-anystate/efpt_to5.parquet"
+)
+```
+
+## totlos
+### time-dependent
+```{r}
+time_points <- seq(0, 6, by = 0.1)
+payment_types <- levels(df_states$payment)
+
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "\n")
+  
+  for (tt in time_points) {
+    los_result <- totlos.msm(
+      msm_full,
+      t = tt,
+      covariates = list(
+        payment = pay_type
+      ),
+      ci = "normal"
+    )
+    
+    # 你的版本返回矩阵：
+    # 第1行 = est
+    # 第2行 = 2.5%
+    # 第3行 = 97.5%
+    res_list[[k]] <- data.frame(
+      t = tt,
+      type = pay_type,
+      
+      los_state1  = los_result[1, 1],
+      los_state1l = los_result[2, 1],
+      los_state1u = los_result[3, 1],
+      
+      los_state2  = los_result[1, 2],
+      los_state2l = los_result[2, 2],
+      los_state2u = los_result[3, 2],
+      
+      los_state3  = los_result[1, 3],
+      los_state3l = los_result[2, 3],
+      los_state3u = los_result[3, 3],
+      
+      los_state4  = los_result[1, 4],
+      los_state4l = los_result[2, 4],
+      los_state4u = los_result[3, 4],
+      
+      los_state5  = los_result[1, 5],
+      los_state5l = los_result[2, 5],
+      los_state5u = los_result[3, 5]
+    )
+    
+    k <- k + 1
+  }
+}
+
+los_timecourse_table <- bind_rows(res_list)
+
+head(los_timecourse_table)
+```
+
+```{r}
+write_parquet(
+  los_timecourse_table,
+  "File/Result/Part2/External-validation/totlos_timedependent.parquet"
+)
+```
+### 6years
+```{r}
+res_list <- list()
+k <- 1
+
+for (pay_type in payment_types) {
+  cat("处理支付方式:", pay_type, "\n")
+  
+  # 计算到第 5 年时，不同状态的期望逗留时间
+  los_result <- totlos.msm(
+    msm_full, 
+    t = 5, 
+    covariates = list(
+      payment = pay_type
+    ),
+    ci = "normal",
+    B = 200
+  )
+  
+  # los_result 是一个原子向量，包含了状态 1 到状态 5 的期望逗留时间
+  res_list[[k]] <- data.frame(
+    type = pay_type,
+    # age10 = ref_age,
+    # gender = ref_gender,
+    t = 6,
+    
+    # 使用索引直接访问各状态的期望逗留时间
+    los_state1  = los_result[1],
+    los_state1l = los_result[2],
+    los_state1u = los_result[3],
+    
+    los_state2  = los_result[4],
+    los_state2l = los_result[5],
+    los_state2u = los_result[6],
+    
+    los_state3  = los_result[7],
+    los_state3l = los_result[8],
+    los_state3u = los_result[9],
+    
+    los_state4  = los_result[10],
+    los_state4l = los_result[11],
+    los_state4u = los_result[12],
+    
+    los_state5  = los_result[13],
+    los_state5l = los_result[14],
+    los_state5u = los_result[15]
+  )
+  
+  k <- k + 1
+}
+
+# 汇总所有医保类型的结果
+los_table_6y <- bind_rows(res_list)
+```
+
+
+```{r}
+# 保存结果为 Parquet 文件
+write_parquet(
+  los_table_6y,
+  "File/Result/Part2/External-validation/totlos_6y.parquet"
+)
+```
+
+

@@ -1,0 +1,150 @@
+```{r}
+library(arrow)
+library(cmprsk)
+library(tidyr)
+library(dplyr)
+library(survival)
+```
+
+
+# Main
+```{r}
+df <- read_parquet("File/Part Data/part3-main.parquet")
+
+df$医疗付款方式 <- factor(df$医疗付款方式,
+    levels = c("SP","URRBMI", "UEBMI", 
+               "COI","GS"))
+df$性别 <- factor(df$性别, levels = c(0, 1))
+df$年龄 <- as.numeric(df$年龄)
+
+df$heart <- factor(df$heart, levels = c(0, 1))
+df$brain <- factor(df$brain, levels = c(0, 1))
+df$kidney <- factor(df$kidney, levels = c(0, 1))
+
+df <- drop_na(df, 年龄)
+df <- drop_na(df, 性别)
+df <- drop_na(df, 医疗付款方式)
+df <- drop_na(df, spe_follow_time)
+df <- drop_na(df, status)
+
+df_clean <- df %>%
+  filter(!is.na(spe_follow_time), !is.na(status), !is.nan(spe_follow_time), !is.nan(status), !is.infinite(spe_follow_time), !is.infinite(status)) 
+```
+
+
+```{r}
+allcause_model <- coxph(
+  formula = Surv(allcause_follow_time, allcause_event) ~ 年龄 + 性别 + heart + brain + kidney + 医疗付款方式,
+  data = df_clean,
+)
+exp(confint(allcause_model))
+summary(allcause_model)
+```
+
+```{r}
+spe_model <- coxph(
+  formula = Surv(spe_follow_time, spe_event) ~ 年龄 + 性别 + heart + brain + kidney + 医疗付款方式,
+  data = df_clean,
+)
+summary(spe_model)
+```
+
+# Sensitivity-unchanged
+
+```{r}
+df <- read_parquet("File/Part Data/part3-sensitivity-unchanged.parquet")
+
+df$医疗付款方式 <- factor(df$医疗付款方式, levels = c("SP", "UEBMI", "URRBMI", "COI", "GS"))
+df$性别 <- factor(df$性别, levels = c(0, 1))
+df$年龄 <- as.numeric(df$年龄)
+
+df$heart <- factor(df$heart, levels = c(0, 1))
+df$brain <- factor(df$brain, levels = c(0, 1))
+df$kidney <- factor(df$kidney, levels = c(0, 1))
+
+df <- drop_na(df, 年龄)
+df <- drop_na(df, 性别)
+df <- drop_na(df, 医疗付款方式)
+df <- drop_na(df, spe_follow_time)
+df <- drop_na(df, status)
+
+df_clean <- df %>%
+  filter(!is.na(spe_follow_time), !is.na(status), !is.nan(spe_follow_time), !is.nan(status), !is.infinite(spe_follow_time), !is.infinite(status)) 
+```
+
+
+```{r}
+allcause_model <- coxph(
+  formula = Surv(allcause_follow_time, allcause_event) ~ 年龄 + 性别 + heart + brain + kidney + 医疗付款方式,
+  data = df_clean,
+)
+exp(confint(allcause_model))
+summary(allcause_model)
+```
+
+```{r}
+spe_model <- coxph(
+  formula = Surv(spe_follow_time, spe_event) ~ 年龄 + 性别 + heart + brain + kidney + 医疗付款方式,
+  data = df_clean,
+)
+summary(spe_model)
+```
+# Fine-Gray
+```{r}
+library(arrow)
+library(cmprsk)
+library(tidyr)
+library(dplyr)
+library(haven)
+library(survival)
+```
+
+```{r}
+df <- read_parquet("File/Part Data/part3-main.parquet")
+df$医疗付款方式 <- factor(df$医疗付款方式,
+    levels = c("SP","URRBMI", "UEBMI", 
+               "COI","GS"))
+df$性别 <- factor(df$性别, levels = c(0,1))
+df$年龄 <- as.numeric(df$年龄)
+
+df <- drop_na(df, 年龄)
+df <- drop_na(df, 性别)
+df <- drop_na(df, 医疗付款方式)
+df <- drop_na(df, spe_follow_time)
+df <- drop_na(df, status)
+
+df_clean <- df %>%
+  filter(!is.na(spe_follow_time), !is.na(status), !is.nan(spe_follow_time), !is.nan(status), !is.infinite(spe_follow_time), !is.infinite(status)) 
+```
+
+```{r}
+CIF <- cmprsk::cuminc(df$spe_follow_time, df$status, df$医疗付款方式)
+plot(CIF, ylim=c(0,0.5))
+```
+
+```{r}
+multvar <- df[c("年龄", "性别", "医疗付款方式")]
+attach(multvar)
+cov <- model.matrix(~年龄+性别+医疗付款方式)[,-1]
+detach(multvar)
+sdr <- crr(df$spe_follow_time, df$status, cov, failcode=1, cencode = 0)
+```
+
+```{r}
+summary(sdr)
+```
+
+
+```{r}
+
+fg_model <- coxph(
+  formula = Surv(allcause_follow_time, allcause_event) ~ 年龄 + 性别 + 医疗付款方式,
+  data = df,
+  
+)
+
+summary(fg_model)
+```
+
+
+

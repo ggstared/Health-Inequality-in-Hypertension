@@ -1,0 +1,362 @@
+```{r}
+library(arrow)
+library(dplyr)
+library(mice)
+library(lme4)
+library(broom.mixed)
+library(purrr)
+library(stringr)
+library(openxlsx)
+```
+
+```{r}
+# 读取数据
+df <- read_parquet("File/hpconcat_mi.parquet")
+```
+
+```{r}
+#========================
+# 1. 预处理
+#========================
+
+# 仅保留本次MI和cost主分析需要的变量
+# 请根据你的真实变量名补充/修改
+vars_needed <- c(
+  "身份证号",
+  "医疗付款方式",
+  "入院时间",
+  "性别",
+  "年龄",
+  "住院费",
+  "自付金额",
+  "市"   # 如果你的随机效应城市变量不是这个名字，请改掉
+)
+
+df_mi <- df %>%
+  select(all_of(vars_needed))
+
+# 排除结构性关键变量缺失：身份证号、入院时间
+df_mi <- df_mi %>%
+  filter(!is.na(`身份证号`), !is.na(`入院时间`))
+
+# 类型整理
+df_mi <- df_mi %>%
+  mutate(
+    医疗付款方式 = as.factor(医疗付款方式),
+    性别 = as.factor(性别),
+    city = as.factor(市),
+    年龄 = as.numeric(年龄),
+    住院费 = as.numeric(住院费),
+    自付金额 = as.numeric(自付金额)
+  )
+
+# 如住院费/自付金额存在0，log转换前加一个很小常数
+df_mi <- df_mi %>%
+  mutate(
+    log_住院费 = log(住院费 + 1),
+    log_自付金额 = log(自付金额 + 1)
+  )
+```
+
+```{r}
+# 查看缺失情况
+sapply(df_mi[, c("医疗付款方式", "性别", "年龄", "住院费", "自付金额")], function(x) sum(is.na(x)))
+```
+
+```{r}
+#========================
+# 2. 设置多重插补
+#========================
+
+# mice使用的数据
+mi_data <- df_mi %>%
+  select(
+    医疗付款方式, 性别, 年龄,
+    住院费, 自付金额,
+    log_住院费, log_自付金额,
+    city
+  )
+
+# 初始化
+ini <- mice(mi_data, maxit = 0, printFlag = FALSE)
+
+meth <- ini$method
+pred <- ini$predictorMatrix
+
+# 不插补 city（作为模型中的聚类变量/随机效应分组变量）
+meth["city"] <- ""
+
+# 不直接插补 log变量（由原始费用变量被动更新）
+meth["log_住院费"] <- ""
+meth["log_自付金额"] <- ""
+
+# 设置插补方法
+# 分类变量：logreg / polyreg
+# 连续变量：pmm 更稳
+meth["医疗付款方式"] <- ""   # 若只有二分类可改logreg
+meth["性别"] <- "logreg"            # 若你的性别是二分类
+meth["年龄"] <- "pmm"
+meth["住院费"] <- "pmm"
+meth["自付金额"] <- "pmm"
+
+# 预测矩阵设置
+# 自己不预测自己
+diag(pred) <- 0
+
+# city可以作为预测变量，但本身不被插补
+pred["city", ] <- 0
+
+# log变量不参与被插补，但可由原始变量更新，因此不作为目标
+pred["log_住院费", ] <- 0
+pred["log_自付金额", ] <- 0
+
+# 为避免重复信息，原始费用变量和log费用变量不要互相直接插补
+# 这里只用原始变量插补，log变量后面每个插补数据集再重新计算
+
+pred["住院费", "log_住院费"] <- 0
+pred["自付金额", "log_自付金额"] <- 0
+pred["log_住院费", "住院费"] <- 0
+pred["log_自付金额", "自付金额"] <- 0
+
+# 可视化检查方法
+meth
+```
+```{r}
+# 运行多重插补
+# m = 20 通常够用；maxit 可设 10~20
+imp <- mice(
+  mi_data,
+  m = 5,
+  maxit = 5,
+  method = meth,
+  predictorMatrix = pred,
+  seed = 20260407,
+  printFlag = TRUE
+)
+```
+
+```{r}
+# 可选：查看收敛轨迹
+plot(imp)
+```
+
+```{r}
+#========================
+# 3. complete-case 分析
+#========================
+
+cc_tie <- df_mi %>%
+  filter(
+    !is.na(医疗付款方式),
+    !is.na(性别),
+    !is.na(年龄),
+    !is.na(住院费)
+  ) %>%
+  mutate(
+    log_住院费 = log(住院费 + 1)
+  )
+
+cc_oop <- df_mi %>%
+  filter(
+    !is.na(医疗付款方式),
+    !is.na(性别),
+    !is.na(年龄),
+    !is.na(自付金额)
+  ) %>%
+  mutate(
+    log_自付金额 = log(自付金额 + 1)
+  )
+
+# 设定参考组：如果你要用“全自费”为参考，请确认标签名称
+cc_tie$医疗付款方式 <- relevel(cc_tie$医疗付款方式, ref = "SP")
+cc_oop$医疗付款方式 <- relevel(cc_oop$医疗付款方式, ref = "SP")
+
+fit_cc_tie <- lmer(
+  log_住院费 ~ 医疗付款方式 + 性别 + 年龄 + (1 | 市),
+  data = cc_tie,
+  REML = FALSE
+)
+
+fit_cc_oop <- lmer(
+  log_自付金额 ~ 医疗付款方式 + 性别 + 年龄 + (1 | 市),
+  data = cc_oop,
+  REML = FALSE
+)
+
+cc_tie_res <- broom.mixed::tidy(fit_cc_tie, effects = "fixed", conf.int = TRUE)
+cc_oop_res <- broom.mixed::tidy(fit_cc_oop, effects = "fixed", conf.int = TRUE)
+```
+
+
+```{r}
+#========================
+# 4. 提取每个插补数据集并拟合模型
+#========================
+
+# 提取所有插补后的数据集
+imputed_list <- complete(imp, action = "all")
+
+# 每个插补数据集重新生成log变量，并设参考组
+imputed_list <- lapply(imputed_list, function(dat) {
+  dat %>%
+    mutate(
+      log_住院费 = log(住院费 + 1),
+      log_自付金额 = log(自付金额 + 1),
+      医疗付款方式 = relevel(as.factor(医疗付款方式), ref = "SP"),
+      性别 = as.factor(性别),
+      city = as.factor(city)
+    )
+})
+```
+
+```{r}
+# 拟合函数
+fit_lmer_extract <- function(data, outcome) {
+  form <- as.formula(
+    paste0(outcome, " ~ 医疗付款方式 + 性别 + 年龄 + (1 | city)")
+  )
+  
+  fit <- lmer(form, data = data, REML = FALSE)
+  
+  coefs <- summary(fit)$coefficients
+  tibble(
+    term = rownames(coefs),
+    estimate = coefs[, "Estimate"],
+    std.error = coefs[, "Std. Error"]
+  )
+}
+
+# 对20个插补数据集分别拟合
+res_mi_tie_list <- lapply(imputed_list, fit_lmer_extract, outcome = "log_住院费")
+res_mi_oop_list <- lapply(imputed_list, fit_lmer_extract, outcome = "log_自付金额")
+```
+
+
+```{r}
+#========================
+# 5. Rubin's rules 合并
+#========================
+
+pool_rubin <- function(res_list) {
+  m <- length(res_list)
+  terms <- res_list[[1]]$term
+  
+  pooled <- lapply(terms, function(tm) {
+    ests <- sapply(res_list, function(x) x$estimate[x$term == tm])
+    ses  <- sapply(res_list, function(x) x$std.error[x$term == tm])
+    
+    qbar <- mean(ests)           # 平均估计值
+    ubar <- mean(ses^2)          # 平均组内方差
+    b    <- var(ests)            # 组间方差
+    tvar <- ubar + (1 + 1/m) * b # 总方差
+    
+    se_total <- sqrt(tvar)
+    
+    # 自由度
+    if (b == 0) {
+      df_old <- Inf
+    } else {
+      df_old <- (m - 1) * (1 + ubar / ((1 + 1/m) * b))^2
+    }
+    
+    statistic <- qbar / se_total
+    p.value <- 2 * pt(abs(statistic), df = df_old, lower.tail = FALSE)
+    
+    ci_low  <- qbar - qt(0.975, df = df_old) * se_total
+    ci_high <- qbar + qt(0.975, df = df_old) * se_total
+    
+    tibble(
+      term = tm,
+      estimate = qbar,
+      std.error = se_total,
+      statistic = statistic,
+      df = df_old,
+      p.value = p.value,
+      conf.low = ci_low,
+      conf.high = ci_high
+    )
+  })
+  
+  bind_rows(pooled)
+}
+
+mi_tie_res <- pool_rubin(res_mi_tie_list)
+mi_oop_res <- pool_rubin(res_mi_oop_list)
+```
+
+
+```{r}
+#========================
+# 6. 转换为百分比变化
+#========================
+
+to_percent_change <- function(tab) {
+  tab %>%
+    mutate(
+      pct_change = (exp(estimate) - 1) * 100,
+      pct_low = (exp(conf.low) - 1) * 100,
+      pct_high = (exp(conf.high) - 1) * 100
+    )
+}
+
+cc_tie_res2 <- cc_tie_res %>%
+  mutate(
+    pct_change = (exp(estimate) - 1) * 100,
+    pct_low = (exp(conf.low) - 1) * 100,
+    pct_high = (exp(conf.high) - 1) * 100,
+    analysis = "Complete-case"
+  )
+
+cc_oop_res2 <- cc_oop_res %>%
+  mutate(
+    pct_change = (exp(estimate) - 1) * 100,
+    pct_low = (exp(conf.low) - 1) * 100,
+    pct_high = (exp(conf.high) - 1) * 100,
+    analysis = "Complete-case"
+  )
+
+mi_tie_res2 <- to_percent_change(mi_tie_res) %>%
+  mutate(analysis = "Multiple imputation")
+
+mi_oop_res2 <- to_percent_change(mi_oop_res) %>%
+  mutate(analysis = "Multiple imputation")
+```
+
+
+```{r}
+#========================
+# 7. 生成 complete-case vs MI 对照表
+#========================
+
+compare_tie <- bind_rows(
+  cc_tie_res2 %>%
+    select(term, estimate, conf.low, conf.high, pct_change, pct_low, pct_high, analysis),
+  mi_tie_res2 %>%
+    select(term, estimate, conf.low, conf.high, pct_change, pct_low, pct_high, analysis)
+) %>%
+  arrange(term, analysis)
+
+compare_oop <- bind_rows(
+  cc_oop_res2 %>%
+    select(term, estimate, conf.low, conf.high, pct_change, pct_low, pct_high, analysis),
+  mi_oop_res2 %>%
+    select(term, estimate, conf.low, conf.high, pct_change, pct_low, pct_high, analysis)
+) %>%
+  arrange(term, analysis)
+
+compare_tie
+compare_oop
+```
+```{r}
+#========================
+# 8. 导出Excel/CSV
+#========================
+
+write.xlsx(compare_tie, "File/Result/Part1/MI/MI_compare_TIE.xlsx")
+write.xlsx(compare_oop, "File/Result/Part1/MI/MI_compare_OOP.xlsx")
+```
+
+```{r}
+compare_tie
+```
+

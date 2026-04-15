@@ -1,0 +1,72 @@
+```{r}
+library(readxl)
+library(forestplot)
+```
+
+```{r}
+df <- read_excel("E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Result/Part1/external validation/Part1-external-validation.xlsx", sheet = 'Forest')
+```
+
+```{r}
+tabletext <- data.frame(df$variables, df$feetext, df$retext)
+
+df$feeest <- as.numeric(df$feeest)
+df$feelower <- as.numeric(df$feelower)
+df$feeupper <- as.numeric(df$feeupper)
+
+df$reest <- as.numeric(df$reest)
+df$relower <- as.numeric(df$relower)
+df$reupper <- as.numeric(df$reupper)
+
+mean <- cbind(df$feeest, df$reest)
+lower <- cbind(df$feelower, df$relower)
+upper <- cbind(df$feeupper, df$reupper)
+
+is_summary  <- df$summary
+is_summary_logical <- as.logical(ifelse(is_summary == "T", "TRUE", "FALSE"))
+is_summary_logical
+```
+
+```{r}
+p <-forestplot(	
+  tabletext,
+  mean = mean,
+  lower = lower,
+  upper = upper,
+# boxsize = c(0.3, 0.3)  legend = c('Inpatient Cost', 'Out-of-pokect'),
+  boxsize = c(0.2,0.2),
+  fn.ci_norm = c(fpDrawNormalCI, fpDrawCircleCI),
+  clip = c(-20, 100),
+  line.margin = 0.2,
+  lwd.ci = 1.5,
+  zero = 0,
+  col = fpColors(
+    box = c("#BC3C28", "#0972B5"),
+    lines = c("#BC3C28", "#0972B5"),
+  ),
+  xlab = 'Percent change in cost (%)',
+  txt_gp = fpTxtGp(label = gpar(cex = 0.75),
+                   ticks = gpar(cex = 0.8),
+                   xlab = gpar(cex = 0.8),
+                   title = gpar(cex = 0.8),
+                   legend = gpar(cex = 1.1)),
+  colgap = unit(2, "mm"),
+  lineheight = unit(6.5, "mm"),
+  legend.pos = "bottom",
+  is.summary = is_summary_logical,
+  # xticks = c(-65, -40, -15, 0, 10, 35, 60, 75),
+  xticks = c(-100, -75, -50, -25, 0, 25, 50, 75, 100),
+  ref_line = 0,
+  # xticks = c(-40, -15, 10, 35)
+)
+p
+```
+
+```{r}
+p <- fp_set_zebra_style(p, "#F5F7FA", ignore_subheaders = TRUE)
+
+pdf("E:/vscode/Paper/Health  Inequalities in Hypertension/Revision1/File/Figure/Part1/Forest.pdf", width=8, height=6)
+p
+dev.off()
+```
+

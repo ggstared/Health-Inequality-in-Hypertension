@@ -1,0 +1,969 @@
+```{r}
+library(readxl)
+library(arrow)
+library(lme4)
+library(lmerTest)
+```
+
+# Main
+```{r}
+data <- read_parquet("File/Part Data/part1-main.parquet")
+```
+
+```{r}
+data$年龄 <- as.numeric(data$年龄)
+data$性别 <- factor(data$性别, levels = c(0, 1))
+data$year <- as.numeric(format(as.Date(data$入院时间), "%Y"))
+data$医疗付款方式 <- factor(data$医疗付款方式,
+    levels = c("SP", "UEBMI", "URRBMI", 'GS', 'COI'))
+data$heart <- factor(data$heart, levels = c(0, 1))
+data$brain <- factor(data$brain, levels = c(0, 1))
+data$kidney <- factor(data$kidney, levels = c(0, 1))
+
+data$市 <- as.factor(data$市)
+
+data$sum_fee_log <- log1p(data$sum_fee + 1)
+data$sum_reimbursement_log <- log1p(data$sum_reimbursement + 1)
+```
+
+```{r}
+vars_needed <- c("sum_fee_log", "sum_reimbursement_log", "年龄", "性别", "year", "医疗付款方式", "heart", "kidney", "brain", "市")
+dat <- na.omit(data[, vars_needed])
+
+dat$age_c  = scale(dat$年龄, center = TRUE, scale = FALSE)[,]
+dat$year_c = scale(dat$year,  center = TRUE, scale = FALSE)[,]
+```
+
+```{r}
+export_fixed_effects <- function(model, file_path, conf_level = 0.95) {
+  
+  # 模型类型检查
+  # 提取固定效应系数和标准误
+  coef_est <- fixef(model)
+  vcov_mat <- vcov(model)
+  se_est <- sqrt(diag(vcov_mat))
+  
+  # 获取系数汇总表（用于 t 值和 p 值）
+  coef_summary <- summary(model)$coefficients
+  
+  # 计算 Wald 置信区间（正态近似）
+  alpha <- 1 - conf_level
+  z_crit <- qnorm(1 - alpha/2)
+  lower_orig <- coef_est - z_crit * se_est
+  upper_orig <- coef_est + z_crit * se_est
+  
+  # 转换到原始尺度：exp(β) - 1
+  estimate_trans <- round((exp(coef_est) - 1) * 100, 2)
+  lower_trans <- round((exp(lower_orig) - 1) *100, 2)
+  upper_trans <- round((exp(upper_orig) - 1) *100, 2)
+  
+  # 构建结果数据框
+  result_df <- data.frame(
+    term = names(coef_est),
+    # 转换后尺度（原始 y 的近似）
+    estimate_transformed = estimate_trans,
+    lower_CI_transformed = lower_trans,
+    upper_CI_transformed = upper_trans,
+    stringsAsFactors = FALSE
+  )
+  
+  # 保存为 Excel
+  writexl::write_xlsx(result_df, path = file_path)
+  
+  # 提示信息
+  message("结果已保存至：", file_path)
+}
+```
+
+
+```{r}
+m_fee_int <- lmer(
+  sum_fee_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat, REML = TRUE
+)
+
+m_reimburse_int <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat, REML = TRUE
+)
+summary(m_fee_int)
+summary(m_reimburse_int)
+
+# export_fixed_effects(m_fee_int, 'File/Result/Part1/main/All-TIE.xlsx')
+# export_fixed_effects(m_reimburse_int, 'File/Result/Part1/main/All-OOT.xlsx')
+```
+
+```{r}
+dat_19 <- subset(dat, year == 2019)
+m_fee_int_19 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_19, REML = TRUE
+)
+
+m_reimburse_int_19 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_19, REML = TRUE
+)
+summary(m_fee_int_19)
+summary(m_reimburse_int_19)
+
+export_fixed_effects(m_fee_int_19, 'File/Result/Part1/main/19-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_19, 'File/Result/Part1/main/19-OOT.xlsx')
+```
+
+```{r}
+dat_20 <- subset(dat, year == 2020)
+m_fee_int_20 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_20, REML = TRUE
+)
+
+m_reimburse_int_20 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_20, REML = TRUE
+)
+summary(m_fee_int_20)
+summary(m_reimburse_int_20)
+
+export_fixed_effects(m_fee_int_20, 'File/Result/Part1/main/20-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_20, 'File/Result/Part1/main/20-OOT.xlsx')
+```
+
+
+```{r}
+dat_21 <- subset(dat, year == 2021)
+m_fee_int_21 <- lmer(
+  sum_fee_log ~ age_c + 性别  + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_21, REML = TRUE
+)
+
+m_reimburse_int_21 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别  + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_21, REML = TRUE
+)
+summary(m_fee_int_21)
+summary(m_reimburse_int_21)
+
+export_fixed_effects(m_fee_int_21, 'File/Result/Part1/main/21-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_21, 'File/Result/Part1/main/21-OOT.xlsx')
+```
+
+```{r}
+dat_22 <- subset(dat, year == 2022)
+m_fee_int_22 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_22, REML = TRUE
+)
+
+m_reimburse_int_22 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_22, REML = TRUE
+)
+summary(m_fee_int_22)
+summary(m_reimburse_int_22)
+
+export_fixed_effects(m_fee_int_22, 'File/Result/Part1/main/22-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_22, 'File/Result/Part1/main/22-OOT.xlsx')
+```
+
+```{r}
+dat_23 <- subset(dat, year == 2023)
+m_fee_int_23 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_23, REML = TRUE
+)
+
+m_reimburse_int_23 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_23, REML = TRUE
+)
+summary(m_fee_int_23)
+summary(m_reimburse_int_23)
+
+export_fixed_effects(m_fee_int_23, 'File/Result/Part1/main/23-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_23, 'File/Result/Part1/main/23-OOT.xlsx')
+```
+
+```{r}
+dat_24 <- subset(dat, year == 2024)
+m_fee_int_24 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_24, REML = TRUE
+)
+
+m_reimburse_int_24 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_24, REML = TRUE
+)
+summary(m_fee_int_24)
+summary(m_reimburse_int_24)
+
+export_fixed_effects(m_fee_int_24, 'File/Result/Part1/main/24-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_24, 'File/Result/Part1/main/24-OOT.xlsx')
+```
+
+# Sensitivity - onlyhp
+```{r}
+data <- read_parquet("File/Part Data/part1-sensitivity-onlyhp.parquet")
+```
+
+```{r}
+data$年龄 <- as.numeric(data$年龄)
+data$性别 <- factor(data$性别, levels = c(0, 1))
+data$year <- as.numeric(format(as.Date(data$入院时间), "%Y"))
+data$医疗付款方式 <- factor(data$医疗付款方式,
+    levels = c("SP", "UEBMI", "URRBMI", 'GS', 'COI'))
+data$heart <- factor(data$heart, levels = c(0, 1))
+data$brain <- factor(data$brain, levels = c(0, 1))
+data$kidney <- factor(data$kidney, levels = c(0, 1))
+
+data$市 <- as.factor(data$市)
+
+data$sum_fee_log <- log1p(data$sum_fee + 1)
+data$sum_reimbursement_log <- log1p(data$sum_reimbursement + 1)
+```
+
+```{r}
+vars_needed <- c("sum_fee_log", "sum_reimbursement_log", "年龄", "性别", "year", "医疗付款方式", "heart", "kidney", "brain", "市")
+dat <- na.omit(data[, vars_needed])
+
+dat$age_c  = scale(dat$年龄, center = TRUE, scale = FALSE)[,]
+dat$year_c = scale(dat$year,  center = TRUE, scale = FALSE)[,]
+```
+
+```{r}
+export_fixed_effects <- function(model, file_path, conf_level = 0.95) {
+  
+  # 模型类型检查
+  # 提取固定效应系数和标准误
+  coef_est <- fixef(model)
+  vcov_mat <- vcov(model)
+  se_est <- sqrt(diag(vcov_mat))
+  
+  # 获取系数汇总表（用于 t 值和 p 值）
+  coef_summary <- summary(model)$coefficients
+  
+  # 计算 Wald 置信区间（正态近似）
+  alpha <- 1 - conf_level
+  z_crit <- qnorm(1 - alpha/2)
+  lower_orig <- coef_est - z_crit * se_est
+  upper_orig <- coef_est + z_crit * se_est
+  
+  # 转换到原始尺度：exp(β) - 1
+  estimate_trans <- round((exp(coef_est) - 1) * 100, 2)
+  lower_trans <- round((exp(lower_orig) - 1) *100, 2)
+  upper_trans <- round((exp(upper_orig) - 1) *100, 2)
+  
+  # 构建结果数据框
+  result_df <- data.frame(
+    term = names(coef_est),
+    # 转换后尺度（原始 y 的近似）
+    estimate_transformed = estimate_trans,
+    lower_CI_transformed = lower_trans,
+    upper_CI_transformed = upper_trans,
+    stringsAsFactors = FALSE
+  )
+  
+  # 保存为 Excel
+  writexl::write_xlsx(result_df, path = file_path)
+  
+  # 提示信息
+  message("结果已保存至：", file_path)
+}
+```
+
+
+```{r}
+m_fee_int <- lmer(
+  sum_fee_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat, REML = TRUE
+)
+
+m_reimburse_int <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat, REML = TRUE
+)
+summary(m_fee_int)
+summary(m_reimburse_int)
+
+export_fixed_effects(m_fee_int, 'File/Result/Part1/sensitivity-onlyhp/All-TIE.xlsx')
+export_fixed_effects(m_reimburse_int, 'File/Result/Part1/sensitivity-onlyhp/All-OOT.xlsx')
+```
+
+```{r}
+dat_19 <- subset(dat, year == 2019)
+m_fee_int_19 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_19, REML = TRUE
+)
+
+m_reimburse_int_19 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_19, REML = TRUE
+)
+summary(m_fee_int_19)
+summary(m_reimburse_int_19)
+
+export_fixed_effects(m_fee_int_19, 'File/Result/Part1/sensitivity-onlyhp/19-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_19, 'File/Result/Part1/sensitivity-onlyhp/19-OOT.xlsx')
+```
+
+```{r}
+dat_20 <- subset(dat, year == 2020)
+m_fee_int_20 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_20, REML = TRUE
+)
+
+m_reimburse_int_20 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_20, REML = TRUE
+)
+summary(m_fee_int_20)
+summary(m_reimburse_int_20)
+
+export_fixed_effects(m_fee_int_20, 'File/Result/Part1/sensitivity-onlyhp/20-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_20, 'File/Result/Part1/sensitivity-onlyhp/20-OOT.xlsx')
+```
+
+
+```{r}
+dat_21 <- subset(dat, year == 2021)
+m_fee_int_21 <- lmer(
+  sum_fee_log ~ age_c + 性别  + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_21, REML = TRUE
+)
+
+m_reimburse_int_21 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别  + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_21, REML = TRUE
+)
+summary(m_fee_int_21)
+summary(m_reimburse_int_21)
+
+export_fixed_effects(m_fee_int_21, 'File/Result/Part1/sensitivity-onlyhp/21-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_21, 'File/Result/Part1/sensitivity-onlyhp/21-OOT.xlsx')
+```
+
+```{r}
+dat_22 <- subset(dat, year == 2022)
+m_fee_int_22 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_22, REML = TRUE
+)
+
+m_reimburse_int_22 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_22, REML = TRUE
+)
+summary(m_fee_int_22)
+summary(m_reimburse_int_22)
+
+export_fixed_effects(m_fee_int_22, 'File/Result/Part1/sensitivity-onlyhp/22-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_22, 'File/Result/Part1/sensitivity-onlyhp/22-OOT.xlsx')
+```
+
+```{r}
+dat_23 <- subset(dat, year == 2023)
+m_fee_int_23 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_23, REML = TRUE
+)
+
+m_reimburse_int_23 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_23, REML = TRUE
+)
+summary(m_fee_int_23)
+summary(m_reimburse_int_23)
+
+export_fixed_effects(m_fee_int_23, 'File/Result/Part1/sensitivity-onlyhp/23-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_23, 'File/Result/Part1/sensitivity-onlyhp/23-OOT.xlsx')
+```
+
+```{r}
+dat_24 <- subset(dat, year == 2024)
+m_fee_int_24 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_24, REML = TRUE
+)
+
+m_reimburse_int_24 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_24, REML = TRUE
+)
+summary(m_fee_int_24)
+summary(m_reimburse_int_24)
+
+export_fixed_effects(m_fee_int_24, 'File/Result/Part1/sensitivity-onlyhp/24-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_24, 'File/Result/Part1/sensitivity-onlyhp/24-OOT.xlsx')
+```
+
+
+# Sensitivity - unchanged
+## main
+```{r}
+data <- read_parquet("File/Part Data/part1-sensitivity-unchanged.parquet")
+```
+
+```{r}
+data$年龄 <- as.numeric(data$年龄)
+data$性别 <- factor(data$性别, levels = c(0, 1))
+data$year <- as.numeric(format(as.Date(data$入院时间), "%Y"))
+data$医疗付款方式 <- factor(data$医疗付款方式,
+    levels = c("SP", "UEBMI", "URRBMI", 'GS', 'COI'))
+data$heart <- factor(data$heart, levels = c(0, 1))
+data$brain <- factor(data$brain, levels = c(0, 1))
+data$kidney <- factor(data$kidney, levels = c(0, 1))
+
+data$市 <- as.factor(data$市)
+
+data$sum_fee_log <- log1p(data$sum_fee + 1)
+data$sum_reimbursement_log <- log1p(data$sum_reimbursement + 1)
+```
+
+```{r}
+vars_needed <- c("sum_fee_log", "sum_reimbursement_log", "年龄", "性别", "year", "医疗付款方式", "heart", "kidney", "brain", "市")
+dat <- na.omit(data[, vars_needed])
+
+dat$age_c  = scale(dat$年龄, center = TRUE, scale = FALSE)[,]
+dat$year_c = scale(dat$year,  center = TRUE, scale = FALSE)[,]
+```
+
+```{r}
+export_fixed_effects <- function(model, file_path, conf_level = 0.95) {
+  
+  # 模型类型检查
+  # 提取固定效应系数和标准误
+  coef_est <- fixef(model)
+  vcov_mat <- vcov(model)
+  se_est <- sqrt(diag(vcov_mat))
+  
+  # 获取系数汇总表（用于 t 值和 p 值）
+  coef_summary <- summary(model)$coefficients
+  
+  # 计算 Wald 置信区间（正态近似）
+  alpha <- 1 - conf_level
+  z_crit <- qnorm(1 - alpha/2)
+  lower_orig <- coef_est - z_crit * se_est
+  upper_orig <- coef_est + z_crit * se_est
+  
+  # 转换到原始尺度：exp(β) - 1
+  estimate_trans <- round((exp(coef_est) - 1) * 100, 2)
+  lower_trans <- round((exp(lower_orig) - 1) *100, 2)
+  upper_trans <- round((exp(upper_orig) - 1) *100, 2)
+  
+  # 构建结果数据框
+  result_df <- data.frame(
+    term = names(coef_est),
+    # 转换后尺度（原始 y 的近似）
+    estimate_transformed = estimate_trans,
+    lower_CI_transformed = lower_trans,
+    upper_CI_transformed = upper_trans,
+    stringsAsFactors = FALSE
+  )
+  
+  # 保存为 Excel
+  writexl::write_xlsx(result_df, path = file_path)
+  
+  # 提示信息
+  message("结果已保存至：", file_path)
+}
+```
+
+
+```{r}
+m_fee_int <- lmer(
+  sum_fee_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat, REML = TRUE
+)
+
+m_reimburse_int <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat, REML = TRUE
+)
+summary(m_fee_int)
+summary(m_reimburse_int)
+
+export_fixed_effects(m_fee_int, 'File/Result/Part1/sensitivity-unchanged/All-TIE.xlsx')
+export_fixed_effects(m_reimburse_int, 'File/Result/Part1/sensitivity-unchanged/All-OOT.xlsx')
+```
+
+```{r}
+dat_19 <- subset(dat, year == 2019)
+m_fee_int_19 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_19, REML = TRUE
+)
+
+m_reimburse_int_19 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_19, REML = TRUE
+)
+summary(m_fee_int_19)
+summary(m_reimburse_int_19)
+
+export_fixed_effects(m_fee_int_19, 'File/Result/Part1/sensitivity-unchanged/19-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_19, 'File/Result/Part1/sensitivity-unchanged/19-OOT.xlsx')
+```
+
+```{r}
+dat_20 <- subset(dat, year == 2020)
+m_fee_int_20 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_20, REML = TRUE
+)
+
+m_reimburse_int_20 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_20, REML = TRUE
+)
+summary(m_fee_int_20)
+summary(m_reimburse_int_20)
+
+export_fixed_effects(m_fee_int_20, 'File/Result/Part1/sensitivity-unchanged/20-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_20, 'File/Result/Part1/sensitivity-unchanged/20-OOT.xlsx')
+```
+
+
+```{r}
+dat_21 <- subset(dat, year == 2021)
+m_fee_int_21 <- lmer(
+  sum_fee_log ~ age_c + 性别  + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_21, REML = TRUE
+)
+
+m_reimburse_int_21 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别  + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_21, REML = TRUE
+)
+summary(m_fee_int_21)
+summary(m_reimburse_int_21)
+
+export_fixed_effects(m_fee_int_21, 'File/Result/Part1/sensitivity-unchanged/21-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_21, 'File/Result/Part1/sensitivity-unchanged/21-OOT.xlsx')
+```
+
+```{r}
+dat_22 <- subset(dat, year == 2022)
+m_fee_int_22 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_22, REML = TRUE
+)
+
+m_reimburse_int_22 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_22, REML = TRUE
+)
+summary(m_fee_int_22)
+summary(m_reimburse_int_22)
+
+export_fixed_effects(m_fee_int_22, 'File/Result/Part1/sensitivity-unchanged/22-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_22, 'File/Result/Part1/sensitivity-unchanged/22-OOT.xlsx')
+```
+
+```{r}
+dat_23 <- subset(dat, year == 2023)
+m_fee_int_23 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_23, REML = TRUE
+)
+
+m_reimburse_int_23 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_23, REML = TRUE
+)
+summary(m_fee_int_23)
+summary(m_reimburse_int_23)
+
+export_fixed_effects(m_fee_int_23, 'File/Result/Part1/sensitivity-unchanged/23-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_23, 'File/Result/Part1/sensitivity-unchanged/23-OOT.xlsx')
+```
+
+```{r}
+dat_24 <- subset(dat, year == 2024)
+m_fee_int_24 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_24, REML = TRUE
+)
+
+m_reimburse_int_24 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat_24, REML = TRUE
+)
+summary(m_fee_int_24)
+summary(m_reimburse_int_24)
+
+export_fixed_effects(m_fee_int_24, 'File/Result/Part1/sensitivity-unchanged/24-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_24, 'File/Result/Part1/sensitivity-unchanged/24-OOT.xlsx')
+```
+
+# Covid Before
+```{r}
+data <- read_parquet("File/Part Data/part1-sensitivity-covid-before.parquet")
+```
+
+```{r}
+data$年龄 <- as.numeric(data$年龄)
+data$性别 <- factor(data$性别, levels = c(0, 1))
+data$year <- as.numeric(format(as.Date(data$入院时间), "%Y"))
+data$医疗付款方式 <- factor(data$医疗付款方式,
+    levels = c("SP", "UEBMI", "URRBMI", 'GS', 'COI'))
+data$heart <- factor(data$heart, levels = c(0, 1))
+data$brain <- factor(data$brain, levels = c(0, 1))
+data$kidney <- factor(data$kidney, levels = c(0, 1))
+
+# data$市 <- as.factor(data$市)
+
+data$sum_fee_log <- log1p(data$sum_fee + 1)
+data$sum_reimbursement_log <- log1p(data$sum_reimbursement + 1)
+```
+
+```{r}
+vars_needed <- c("sum_fee_log", "sum_reimbursement_log", "年龄", "性别", "year", "医疗付款方式", "heart", "kidney", "brain", "市")
+dat <- na.omit(data[, vars_needed])
+
+dat$age_c  = scale(dat$年龄, center = TRUE, scale = FALSE)[,]
+dat$year_c = scale(dat$year,  center = TRUE, scale = FALSE)[,]
+```
+
+```{r}
+export_fixed_effects <- function(model, file_path, conf_level = 0.95) {
+  
+  # 模型类型检查
+  # 提取固定效应系数和标准误
+  coef_est <- fixef(model)
+  vcov_mat <- vcov(model)
+  se_est <- sqrt(diag(vcov_mat))
+  
+  # 获取系数汇总表（用于 t 值和 p 值）
+  coef_summary <- summary(model)$coefficients
+  
+  # 计算 Wald 置信区间（正态近似）
+  alpha <- 1 - conf_level
+  z_crit <- qnorm(1 - alpha/2)
+  lower_orig <- coef_est - z_crit * se_est
+  upper_orig <- coef_est + z_crit * se_est
+  
+  # 转换到原始尺度：exp(β) - 1
+  estimate_trans <- round((exp(coef_est) - 1) * 100, 2)
+  lower_trans <- round((exp(lower_orig) - 1) *100, 2)
+  upper_trans <- round((exp(upper_orig) - 1) *100, 2)
+  
+  # 构建结果数据框
+  result_df <- data.frame(
+    term = names(coef_est),
+    # 转换后尺度（原始 y 的近似）
+    estimate_transformed = estimate_trans,
+    lower_CI_transformed = lower_trans,
+    upper_CI_transformed = upper_trans,
+    stringsAsFactors = FALSE
+  )
+  
+  # 保存为 Excel
+  writexl::write_xlsx(result_df, path = file_path)
+  
+  # 提示信息
+  message("结果已保存至：", file_path)
+}
+```
+
+```{r}
+m_fee_int <- lmer(
+  sum_fee_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat, REML = TRUE
+)
+
+m_reimburse_int <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat, REML = TRUE
+)
+summary(m_fee_int)
+summary(m_reimburse_int)
+
+export_fixed_effects(m_fee_int, 'File/Result/Part1/Sensitivity-covid/before/All-TIE.xlsx')
+export_fixed_effects(m_reimburse_int, 'File/Result/Part1/Sensitivity-covid/before/All-OOT.xlsx')
+```
+
+# Covid After
+```{r}
+data <- read_parquet("File/Part Data/part1-sensitivity-covid-after.parquet")
+```
+
+```{r}
+data$年龄 <- as.numeric(data$年龄)
+data$性别 <- factor(data$性别, levels = c(0, 1))
+data$year <- as.numeric(format(as.Date(data$入院时间), "%Y"))
+data$医疗付款方式 <- factor(data$医疗付款方式,
+    levels = c("SP", "UEBMI", "URRBMI", 'GS', 'COI'))
+data$heart <- factor(data$heart, levels = c(0, 1))
+data$brain <- factor(data$brain, levels = c(0, 1))
+data$kidney <- factor(data$kidney, levels = c(0, 1))
+
+# data$市 <- as.factor(data$市)
+
+data$sum_fee_log <- log1p(data$sum_fee + 1)
+data$sum_reimbursement_log <- log1p(data$sum_reimbursement + 1)
+```
+
+```{r}
+vars_needed <- c("sum_fee_log", "sum_reimbursement_log", "年龄", "性别", "year", "医疗付款方式", "heart", "kidney", "brain", "市")
+dat <- na.omit(data[, vars_needed])
+
+dat$age_c  = scale(dat$年龄, center = TRUE, scale = FALSE)[,]
+dat$year_c = scale(dat$year,  center = TRUE, scale = FALSE)[,]
+```
+
+```{r}
+export_fixed_effects <- function(model, file_path, conf_level = 0.95) {
+  
+  # 模型类型检查
+  # 提取固定效应系数和标准误
+  coef_est <- fixef(model)
+  vcov_mat <- vcov(model)
+  se_est <- sqrt(diag(vcov_mat))
+  
+  # 获取系数汇总表（用于 t 值和 p 值）
+  coef_summary <- summary(model)$coefficients
+  
+  # 计算 Wald 置信区间（正态近似）
+  alpha <- 1 - conf_level
+  z_crit <- qnorm(1 - alpha/2)
+  lower_orig <- coef_est - z_crit * se_est
+  upper_orig <- coef_est + z_crit * se_est
+  
+  # 转换到原始尺度：exp(β) - 1
+  estimate_trans <- round((exp(coef_est) - 1) * 100, 2)
+  lower_trans <- round((exp(lower_orig) - 1) *100, 2)
+  upper_trans <- round((exp(upper_orig) - 1) *100, 2)
+  
+  # 构建结果数据框
+  result_df <- data.frame(
+    term = names(coef_est),
+    # 转换后尺度（原始 y 的近似）
+    estimate_transformed = estimate_trans,
+    lower_CI_transformed = lower_trans,
+    upper_CI_transformed = upper_trans,
+    stringsAsFactors = FALSE
+  )
+  
+  # 保存为 Excel
+  writexl::write_xlsx(result_df, path = file_path)
+  
+  # 提示信息
+  message("结果已保存至：", file_path)
+}
+```
+
+```{r}
+m_fee_int <- lmer(
+  sum_fee_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat, REML = TRUE
+)
+
+m_reimburse_int <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 市),
+  data = dat, REML = TRUE
+)
+summary(m_fee_int)
+summary(m_reimburse_int)
+
+export_fixed_effects(m_fee_int, 'File/Result/Part1/Sensitivity-covid/after/All-TIE.xlsx')
+export_fixed_effects(m_reimburse_int, 'File/Result/Part1/Sensitivity-covid/after/All-OOT.xlsx')
+```
+
+# External Validation
+```{r}
+data <- read_parquet("File/Part Data/part1-external-validation.parquet")
+```
+
+```{r}
+data$年龄 <- as.numeric(data$年龄)
+data$性别 <- factor(data$性别, levels = c(0, 1))
+data$year <- as.numeric(format(as.Date(data$入院时间), "%Y"))
+data$医疗付款方式 <- factor(data$医疗付款方式,
+    levels = c("SP", "UEBMI", "URRBMI", 'GS', 'COI'))
+data$heart <- factor(data$heart, levels = c(0, 1))
+data$brain <- factor(data$brain, levels = c(0, 1))
+data$kidney <- factor(data$kidney, levels = c(0, 1))
+
+# data$市 <- as.factor(data$市)
+
+data$sum_fee_log <- log1p(data$sum_fee + 1)
+data$sum_reimbursement_log <- log1p(data$sum_reimbursement + 1)
+```
+
+```{r}
+vars_needed <- c("sum_fee_log", "sum_reimbursement_log", "年龄", "性别", "year", "医疗付款方式", "heart", "kidney", "brain", "现住址邮政编码")
+dat <- na.omit(data[, vars_needed])
+
+dat$age_c  = scale(dat$年龄, center = TRUE, scale = FALSE)[,]
+dat$year_c = scale(dat$year,  center = TRUE, scale = FALSE)[,]
+```
+
+```{r}
+export_fixed_effects <- function(model, file_path, conf_level = 0.95) {
+  
+  # 模型类型检查
+  # 提取固定效应系数和标准误
+  coef_est <- fixef(model)
+  vcov_mat <- vcov(model)
+  se_est <- sqrt(diag(vcov_mat))
+  
+  # 获取系数汇总表（用于 t 值和 p 值）
+  coef_summary <- summary(model)$coefficients
+  
+  # 计算 Wald 置信区间（正态近似）
+  alpha <- 1 - conf_level
+  z_crit <- qnorm(1 - alpha/2)
+  lower_orig <- coef_est - z_crit * se_est
+  upper_orig <- coef_est + z_crit * se_est
+  
+  # 转换到原始尺度：exp(β) - 1
+  estimate_trans <- round((exp(coef_est) - 1) * 100, 2)
+  lower_trans <- round((exp(lower_orig) - 1) *100, 2)
+  upper_trans <- round((exp(upper_orig) - 1) *100, 2)
+  
+  # 构建结果数据框
+  result_df <- data.frame(
+    term = names(coef_est),
+    # 转换后尺度（原始 y 的近似）
+    estimate_transformed = estimate_trans,
+    lower_CI_transformed = lower_trans,
+    upper_CI_transformed = upper_trans,
+    stringsAsFactors = FALSE
+  )
+  
+  # 保存为 Excel
+  writexl::write_xlsx(result_df, path = file_path)
+  
+  # 提示信息
+  message("结果已保存至：", file_path)
+}
+```
+
+```{r}
+m_fee_int <- lmer(
+  sum_fee_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat, REML = TRUE
+)
+
+m_reimburse_int <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + year_c + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat, REML = TRUE
+)
+summary(m_fee_int)
+summary(m_reimburse_int)
+
+export_fixed_effects(m_fee_int, 'File/Result/Part1/external validation/All-TIE.xlsx')
+export_fixed_effects(m_reimburse_int, 'File/Result/Part1/external validation/All-OOT.xlsx')
+```
+
+```{r}
+dat_19 <- subset(dat, year == 2019)
+m_fee_int_19 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_19, REML = TRUE
+)
+
+m_reimburse_int_19 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_19, REML = TRUE
+)
+summary(m_fee_int_19)
+summary(m_reimburse_int_19)
+
+export_fixed_effects(m_fee_int_19, 'File/Result/Part1/external validation/19-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_19, 'File/Result/Part1/external validation/19-OOT.xlsx')
+```
+
+```{r}
+dat_20 <- subset(dat, year == 2020)
+m_fee_int_20 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_20, REML = TRUE
+)
+
+m_reimburse_int_20 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_20, REML = TRUE
+)
+summary(m_fee_int_20)
+summary(m_reimburse_int_20)
+
+export_fixed_effects(m_fee_int_20, 'File/Result/Part1/external validation/20-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_20, 'File/Result/Part1/external validation/20-OOT.xlsx')
+```
+
+
+```{r}
+dat_21 <- subset(dat, year == 2021)
+m_fee_int_21 <- lmer(
+  sum_fee_log ~ age_c + 性别  + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_21, REML = TRUE
+)
+
+m_reimburse_int_21 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别  + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_21, REML = TRUE
+)
+summary(m_fee_int_21)
+summary(m_reimburse_int_21)
+
+export_fixed_effects(m_fee_int_21, 'File/Result/Part1/external validation/21-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_21, 'File/Result/Part1/external validation/21-OOT.xlsx')
+```
+
+```{r}
+dat_22 <- subset(dat, year == 2022)
+m_fee_int_22 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_22, REML = TRUE
+)
+
+m_reimburse_int_22 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_22, REML = TRUE
+)
+summary(m_fee_int_22)
+summary(m_reimburse_int_22)
+
+export_fixed_effects(m_fee_int_22, 'File/Result/Part1/external validation/22-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_22, 'File/Result/Part1/external validation/22-OOT.xlsx')
+```
+
+```{r}
+dat_23 <- subset(dat, year == 2023)
+m_fee_int_23 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_23, REML = TRUE
+)
+
+m_reimburse_int_23 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_23, REML = TRUE
+)
+summary(m_fee_int_23)
+summary(m_reimburse_int_23)
+
+export_fixed_effects(m_fee_int_23, 'File/Result/Part1/external validation/23-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_23, 'File/Result/Part1/external validation/23-OOT.xlsx')
+```
+
+```{r}
+dat_24 <- subset(dat, year == 2024)
+m_fee_int_24 <- lmer(
+  sum_fee_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_24, REML = TRUE
+)
+
+m_reimburse_int_24 <- lmer(
+  sum_reimbursement_log ~ age_c + 性别 + heart + brain + kidney + 医疗付款方式 + (1 | 现住址邮政编码),
+  data = dat_24, REML = TRUE
+)
+summary(m_fee_int_24)
+summary(m_reimburse_int_24)
+
+export_fixed_effects(m_fee_int_24, 'File/Result/Part1/external validation/24-TIE.xlsx')
+export_fixed_effects(m_reimburse_int_24, 'File/Result/Part1/external validation/24-OOT.xlsx')
+```
